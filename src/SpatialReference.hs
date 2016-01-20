@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -42,6 +43,9 @@ module SpatialReference (
 ) where
 
 
+#if !MIN_VERSION_base(4,8,0)
+import Control.Applicative ((<$>), (<*>))
+#endif
 import Data.Aeson         ( ToJSON(toJSON), FromJSON(parseJSON)
                           , Value(Null,Object), withText, withObject
                           , withScientific, object, (.=), (.:), (.:?))
