@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module SpatialReference (
     KnownCrs
@@ -18,14 +19,19 @@ module SpatialReference (
   , Epsg
   , SrOrg
 
-  , CrsView (..)
-
-  , crs
+  , pattern Named
+  , pattern Coded
+  , pattern Epsg
+  , pattern SrOrg
+  , pattern Linked
+  , pattern NoCrs
 
   , namedCrs
   , codedCrs
   , linkedCrs
   , noCrs
+  , srOrgCrs
+  , epsgCrs
 
   , reifyCrs
   , reflectCrs
@@ -86,90 +92,129 @@ type Epsg  code = Coded "epsg"   code
 -- >>> Proxy :: Proxy (SrOrg 35)
 type SrOrg code = Coded "sr-org" code
 
--- | The term level 'Crs'
---
-newtype Crs = Crs { crs :: CrsView }
-  deriving (Eq, Ord)
 
-instance Show Crs where show = show . crs
-
-
-data CrsView
-  = Named     !String
-  | Coded     !String         !Int
-  | Linked    !(Maybe String) !String
-  | NoCrs
+-- | The term level 'Crs'. Use the smart constructors to build them.
+data Crs
+  = MkNamed   !String
+  | MkCoded   !String         !Int
+  | MkLinked  !(Maybe String) !String
+  | MkNoCrs
   deriving (Eq, Show, Ord)
+
 -- TODO: Implement a Show instance that normalizes so equivalent CRSs compare
 --       equal
 
+-- | A url for use with 'linkedCrs'
 type Href = String
+
+-- | A text describing the type of crs for use with 'linkedCrs'
+type LinkType = String
+
+--
+-- Pattern synonyms to hide implementation details
+--
+
+-- | Pattern match on a 'namedCrs'
+pattern Named  a   <- MkNamed a
+
+-- | Pattern match on a 'codedCrs'
+pattern Coded  a b <- MkCoded a b
+
+-- | Pattern match on a 'linkedCrs'
+pattern Linked a b <- MkLinked a b
+
+-- | Pattern match on a 'noCrs'
+pattern NoCrs      <- MkNoCrs
+
+-- | Pattern match on a 'epsgCrs'
+pattern Epsg     a <- MkCoded "epsg"   a
+
+-- | Pattern match on a 'srOrgCrs'
+pattern SrOrg    a <- MkCoded "sr-org" a
 
 
 --
 -- Smart constructors
 --
 
+-- | A named 'Crs' constructor
 namedCrs :: String -> Crs
-namedCrs = Crs . Named
+namedCrs = MkNamed
 {-# INLINE namedCrs #-}
 
+-- | A coded 'Crs' smart constructor. The code must be non-negative
 codedCrs :: String -> Int -> Maybe Crs
-codedCrs type_ code | code >= 0 = Just (Crs (Coded type_ code))
+codedCrs type_ code | code >= 0 = Just (MkCoded type_ code)
 codedCrs _    _                 = Nothing
 {-# INLINE codedCrs #-}
 
-linkedCrs :: Maybe String -> Href -> Crs
-linkedCrs type_ href = Crs (Linked type_ href)
+-- | A linked 'Crs' constructor.
+linkedCrs :: Maybe LinkType -> Href -> Crs
+linkedCrs = MkLinked
 {-# INLINE linkedCrs #-}
 
+-- | A null 'Crs' constructor
 noCrs :: Crs
-noCrs = Crs NoCrs
+noCrs = MkNoCrs
 {-# INLINE noCrs #-}
 
+-- | A EPSG code 'Crs' constructor
+epsgCrs :: Int -> Maybe Crs
+epsgCrs = codedCrs "epsg"
+{-# INLINE epsgCrs #-}
+
+-- | A SR-ORG code 'Crs' constructpr
+srOrgCrs :: Int -> Maybe Crs
+srOrgCrs = codedCrs "sr-org"
+{-# INLINE srOrgCrs #-}
 
 --
 -- Reification of term levels to types and reflection from types to terms
 --
 
+-- | The class of 'Crs's that can be reified to the type level and reflected
+--   back
 class KnownCrs (c :: *) where
   _reflectCrs :: proxy c -> Crs
 
 
 instance KnownSymbol name => KnownCrs (Named name) where
-  _reflectCrs _ = Crs (Named (symbolVal (Proxy :: Proxy name)))
+  _reflectCrs _ = namedCrs (symbolVal (Proxy :: Proxy name))
 
 instance ( KnownNat code
          , KnownSymbol type_
          ) => KnownCrs (Coded type_ code) where
-  _reflectCrs _ = Crs (Coded (symbolVal (Proxy :: Proxy type_))
-                             (fromIntegral (natVal (Proxy :: Proxy code))))
+  _reflectCrs _ = MkCoded (symbolVal (Proxy :: Proxy type_))
+                          (fromIntegral (natVal (Proxy :: Proxy code)))
 
 instance ( KnownSymbol href
          , KnownSymbol type_
          ) => KnownCrs (Linked ('Just type_) href) where
-  _reflectCrs _ = Crs (Linked  (Just (symbolVal (Proxy :: Proxy type_)))
-                               (symbolVal (Proxy :: Proxy href)))
+  _reflectCrs _ = linkedCrs (Just (symbolVal (Proxy :: Proxy type_)))
+                            (symbolVal (Proxy :: Proxy href))
 
 instance KnownSymbol href => KnownCrs (Linked 'Nothing href) where
-  _reflectCrs _ = Crs (Linked Nothing (symbolVal (Proxy :: Proxy href)))
+  _reflectCrs _ = linkedCrs Nothing (symbolVal (Proxy :: Proxy href))
 
 
 instance KnownCrs NoCrs where
-  _reflectCrs _ = Crs NoCrs
+  _reflectCrs _ = noCrs
 
 
+-- | Reflect a 'Proxy' of a 'KnownCrs' back into a 'Crs' term.
 reflectCrs :: KnownCrs c => proxy c -> Crs
 reflectCrs = _reflectCrs
 {-# INLINE reflectCrs #-}
 
+-- | Reify a 'Crs' to a 'Proxy' of a 'KnownCrs' which can be used as a
+--   phantom type for geo-spatial objects.
 reifyCrs :: forall a. Crs -> (forall c. KnownCrs c => Proxy c -> a) -> a
-reifyCrs (Crs c) f = case c of
-  Named name ->
+reifyCrs c f = case c of
+  MkNamed name ->
     case someSymbolVal name of
       SomeSymbol (Proxy :: Proxy name) -> f (Proxy :: Proxy (Named name))
 
-  Coded type_ code ->
+  MkCoded type_ code ->
     case someSymbolVal type_ of
       SomeSymbol (Proxy :: Proxy type_) ->
         case someNatVal (fromIntegral (code)) of
@@ -177,7 +222,7 @@ reifyCrs (Crs c) f = case c of
             f (Proxy :: Proxy (Coded type_ code))
           _ -> error "reflectCrs: negative epsg code. this should never happen"
 
-  Linked mType href ->
+  MkLinked mType href ->
     case someSymbolVal href of
       SomeSymbol (Proxy :: Proxy href) ->
         case mType of
@@ -188,32 +233,37 @@ reifyCrs (Crs c) f = case c of
           Nothing ->
                 f (Proxy :: Proxy (Linked 'Nothing href))
 
-  NoCrs -> f (Proxy :: Proxy NoCrs)
+  MkNoCrs -> f (Proxy :: Proxy NoCrs)
 {-# INLINE reifyCrs #-}
 
+-- | Provides a witness of the equality of two 'KnownCrs' types.
+--   Pattern-match on the 'Just Refl' and the compiler will know that
+--   the 'KnownCrs's carried by the proxies is the same type.
 sameCrs :: (KnownCrs a, KnownCrs b) => Proxy a -> Proxy b -> Maybe (a :~: b)
 sameCrs a b | reflectCrs a == reflectCrs b = Just (unsafeCoerce Refl)
 sameCrs _ _                                = Nothing
 {-# INLINE sameCrs #-}
 
 
-
+--
+-- GeoJSON de/serialization
+--
 
 instance ToJSON Crs where
-  toJSON (Crs crs_) = case crs_ of
-    Named s ->
+  toJSON = \case
+    MkNamed s ->
       object [ "type"       .= ("name" :: Text)
              , "properties" .= object ["name" .= s]]
-    Coded t c ->
+    MkCoded t c ->
       object [ "type"       .= t
              , "properties" .= object ["code" .= c]]
-    Linked (Just t) h ->
+    MkLinked (Just t) h ->
       object [ "type"       .= ("link" :: Text)
              , "properties" .= object ["href" .= h, "type" .= t]]
-    Linked Nothing h ->
+    MkLinked Nothing h ->
       object [ "type"       .= ("link" :: Text)
              , "properties" .= object ["href" .= h]]
-    NoCrs -> Null
+    MkNoCrs -> Null
 
 instance FromJSON Crs where
   parseJSON (Object o) = withProperties $ \props -> withType $ \case
