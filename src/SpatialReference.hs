@@ -22,8 +22,6 @@ module SpatialReference (
   , Epsg
   , SrOrg
 
-  , DiscardCrs (..)
-  , HasCrs (..)
   , WithSomeCrs (..)
   , WithCrs (..)
   , withCrs
@@ -262,26 +260,10 @@ sameCrs _ _                                = Nothing
 
 
 
-class DiscardCrs o a | o -> a where
-  discardCrs :: o -> a
-
-class HasCrs o where
-  crs :: o -> Crs
-
 
 -- | A wrapper for something with an associated 'Crs' at the term level
 data WithSomeCrs a = WithSomeCrs Crs a
   deriving (Eq, Show)
-
-instance DiscardCrs (WithSomeCrs a) a where
-  discardCrs (WithSomeCrs _ a) = a
-  {-# INLINE discardCrs #-}
-
-instance HasCrs (WithSomeCrs a) where
-  crs (WithSomeCrs c _) = c
-  {-# INLINE crs #-}
-
-
 
 
 -- | A newtype wrapper for something with an associated 'KnownCrs' at the
@@ -303,14 +285,6 @@ withCrs
 withCrs (WithSomeCrs c a) f =
   reifyCrs c (\(Proxy :: Proxy crs) -> f (WithCrs a :: WithCrs crs a))
 {-# INLINE withCrs #-}
-
-instance DiscardCrs (WithCrs crs a) a where
-  discardCrs = unWithCrs
-  {-# INLINE discardCrs #-}
-
-instance KnownCrs crs => HasCrs (WithCrs crs a) where
-  crs _ = reflectCrs (Proxy :: Proxy crs)
-  {-# INLINE crs #-}
 
 --
 -- GeoJSON de/serialization
