@@ -20,6 +20,8 @@ library
                      , scientific
                      , text
                      , unordered-containers
+                     , deepseq
+                     , hashable
   default-language:    Haskell2010
   ghc-options:         -Wall
                        -fwarn-incomplete-patterns

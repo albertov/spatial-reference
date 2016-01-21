@@ -10,6 +10,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module SpatialReference (
     KnownCrs
@@ -26,6 +27,7 @@ module SpatialReference (
   , WithCrs (..)
   , withCrs
   , untagCrs
+  , asCrsOf
 
   , pattern Named
   , pattern Coded
@@ -53,6 +55,8 @@ module SpatialReference (
 #if !MIN_VERSION_base(4,8,0)
 import           Control.Applicative ((<$>), (<*>))
 #endif
+import           Control.DeepSeq     (NFData)
+import           Data.Hashable       (Hashable)
 import           Data.Aeson          ( ToJSON(toJSON), FromJSON(parseJSON)
                                      , Value(Null,Object), withText, withObject
                                      , withScientific, object, (.=), (.:)
@@ -268,14 +272,14 @@ data WithSomeCrs a = WithSomeCrs Crs a
 
 -- | A newtype wrapper for something with an associated 'KnownCrs' at the
 --   type level
-newtype WithCrs crs a = WithCrs { unWithCrs :: a }
-  deriving (Eq, Show)
+newtype WithCrs crs a = WithCrs { unCrs :: a }
+  deriving (Eq, Show, Ord, NFData, Hashable)
 
 -- | Converts something 'WithCrs' at the type level to a 'WithSomeCrs' at the
 --   term level
 untagCrs :: forall a crs. KnownCrs crs
          => WithCrs crs a -> WithSomeCrs a
-untagCrs t = WithSomeCrs (reflectCrs (Proxy :: Proxy crs)) (unWithCrs t)
+untagCrs t = WithSomeCrs (reflectCrs (Proxy :: Proxy crs)) (unCrs t)
 {-# INLINE untagCrs #-}
 
 -- | Reifies something 'WithSomeCrs' to a 'WithCrs' at the type level
@@ -286,6 +290,9 @@ withCrs (WithSomeCrs c a) f =
   reifyCrs c (\(Proxy :: Proxy crs) -> f (WithCrs a :: WithCrs crs a))
 {-# INLINE withCrs #-}
 
+asCrsOf :: forall crs a b. a -> WithCrs crs b -> WithCrs crs a
+asCrsOf = const . WithCrs
+{-# INLINE asCrsOf #-}
 --
 -- GeoJSON de/serialization
 --
