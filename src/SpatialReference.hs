@@ -1,13 +1,15 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE GADTs #-}
 
 module SpatialReference (
     KnownCrs
@@ -19,6 +21,13 @@ module SpatialReference (
   , NoCrs
   , Epsg
   , SrOrg
+
+  , DiscardCrs (..)
+  , HasCrs (..)
+  , WithSomeCrs (..)
+  , WithCrs (..)
+  , withCrs
+  , untagCrs
 
   , pattern Named
   , pattern Coded
@@ -44,20 +53,23 @@ module SpatialReference (
 
 
 #if !MIN_VERSION_base(4,8,0)
-import Control.Applicative ((<$>), (<*>))
+import           Control.Applicative ((<$>), (<*>))
 #endif
-import Data.Aeson         ( ToJSON(toJSON), FromJSON(parseJSON)
-                          , Value(Null,Object), withText, withObject
-                          , withScientific, object, (.=), (.:), (.:?))
-import Data.Proxy         (Proxy(Proxy))
-import Data.Scientific    (floatingOrInteger)
-import Data.Text          (Text, unpack)
-import Data.Type.Equality ((:~:)(Refl))
-import Control.Monad      (mzero)
-import GHC.TypeLits       ( KnownNat, KnownSymbol, Nat, Symbol
-                          , SomeNat(SomeNat), SomeSymbol(SomeSymbol)
-                          , natVal, symbolVal, someNatVal, someSymbolVal)
-import Unsafe.Coerce      (unsafeCoerce)
+import           Data.Aeson          ( ToJSON(toJSON), FromJSON(parseJSON)
+                                     , Value(Null,Object), withText, withObject
+                                     , withScientific, object, (.=), (.:)
+                                     , (.:?))
+import qualified Data.HashMap.Strict as HM
+import           Data.Proxy          (Proxy(Proxy))
+import           Data.Scientific     (floatingOrInteger)
+import           Data.Text           (Text, unpack)
+import           Data.Type.Equality  ((:~:)(Refl))
+import           Control.Monad       (mzero)
+import           GHC.TypeLits        ( KnownNat, KnownSymbol, Nat, Symbol
+                                     , SomeNat(SomeNat), SomeSymbol(SomeSymbol)
+                                     , natVal, symbolVal, someNatVal
+                                     , someSymbolVal)
+import Unsafe.Coerce                 (unsafeCoerce)
 
 
 --
@@ -249,6 +261,57 @@ sameCrs _ _                                = Nothing
 {-# INLINE sameCrs #-}
 
 
+
+class DiscardCrs o a | o -> a where
+  discardCrs :: o -> a
+
+class HasCrs o where
+  crs :: o -> Crs
+
+
+-- | A wrapper for something with an associated 'Crs' at the term level
+data WithSomeCrs a = WithSomeCrs Crs a
+  deriving (Eq, Show)
+
+instance DiscardCrs (WithSomeCrs a) a where
+  discardCrs (WithSomeCrs _ a) = a
+  {-# INLINE discardCrs #-}
+
+instance HasCrs (WithSomeCrs a) where
+  crs (WithSomeCrs c _) = c
+  {-# INLINE crs #-}
+
+
+
+
+-- | A newtype wrapper for something with an associated 'KnownCrs' at the
+--   type level
+newtype WithCrs crs a = WithCrs { unWithCrs :: a }
+  deriving (Eq, Show)
+
+-- | Converts something 'WithCrs' at the type level to a 'WithSomeCrs' at the
+--   term level
+untagCrs :: forall a crs. KnownCrs crs
+         => WithCrs crs a -> WithSomeCrs a
+untagCrs t = WithSomeCrs (reflectCrs (Proxy :: Proxy crs)) (unWithCrs t)
+{-# INLINE untagCrs #-}
+
+-- | Reifies something 'WithSomeCrs' to a 'WithCrs' at the type level
+withCrs
+  :: forall a b.
+  WithSomeCrs a -> (forall crs. KnownCrs crs => WithCrs crs a -> b) -> b
+withCrs (WithSomeCrs c a) f =
+  reifyCrs c (\(Proxy :: Proxy crs) -> f (WithCrs a :: WithCrs crs a))
+{-# INLINE withCrs #-}
+
+instance DiscardCrs (WithCrs crs a) a where
+  discardCrs = unWithCrs
+  {-# INLINE discardCrs #-}
+
+instance KnownCrs crs => HasCrs (WithCrs crs a) where
+  crs _ = reflectCrs (Proxy :: Proxy crs)
+  {-# INLINE crs #-}
+
 --
 -- GeoJSON de/serialization
 --
@@ -286,3 +349,26 @@ instance FromJSON Crs where
         o .: "type" >>= withText "crs: type must be a string" f
   parseJSON Null = return noCrs
   parseJSON _    = mzero
+
+
+instance ToJSON a => ToJSON (WithSomeCrs a) where
+  toJSON (WithSomeCrs c a) =
+    case toJSON a of
+      Object o -> Object (HM.insert "crs" (toJSON c) o)
+      o        -> o
+
+instance FromJSON a => FromJSON (WithSomeCrs a) where
+  parseJSON = withObject "FromJSON(WithSomeCrs): expected an object" $ \o -> do
+    WithSomeCrs <$> o .: "crs" <*> parseJSON (Object o)
+
+
+instance (KnownCrs crs, ToJSON a) => ToJSON (WithCrs crs a) where
+  toJSON = toJSON . untagCrs
+
+instance (KnownCrs crs, FromJSON a) => FromJSON (WithCrs crs a) where
+  parseJSON o = do
+    t <- parseJSON o
+    withCrs t $ \(ret :: WithCrs crs2 a) ->
+      case sameCrs (Proxy :: Proxy crs) (Proxy :: Proxy crs2) of
+        Just Refl -> return ret
+        Nothing   -> fail "FromJSON(WithCrs): crs mismatch"
