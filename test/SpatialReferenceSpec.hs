@@ -4,7 +4,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GADTs #-}
 
 module SpatialReferenceSpec (main, spec) where
@@ -17,6 +19,9 @@ import Control.Applicative ((<$>), (<*>), pure)
 
 import Data.Aeson
 import Data.Maybe (fromJust)
+import Data.Proxy
+
+import GHC.Generics
 
 import Test.Hspec
 import Test.Hspec.QuickCheck
@@ -50,8 +55,21 @@ spec = do
             _         -> c1 /= c2
 
   describe "geojson de/serialization" $ do
-    prop "eitherDecode (encode c) == Right c" $ \(c :: CrsObject) ->
-      eitherDecode (encode c) == Right c
+
+    describe "Crs" $
+      prop "eitherDecode (encode c) == Right c" $ \(c :: CrsObject) ->
+        eitherDecode (encode c) == Right c
+
+    describe "WithSomeCrs" $ do
+      prop "eitherDecode (encode c) == Right c" $ \(c :: WithSomeCrs Thing) ->
+        eitherDecode (encode c) == Right c
+
+  describe "unWithSomeCrs" $ do
+    prop "returns Just iff crs matches" $ \(thing :: WithSomeCrs Thing) crs ->
+      reifyCrs crs $ \(Proxy :: Proxy crs) ->
+        case unWithSomeCrs thing :: Maybe (Thing crs) of
+          Just _  -> crs == getCrs thing
+          Nothing -> crs /= getCrs thing
 
 -- A wrapper because aeson requires a toplevel object and a NoCrs must be
 -- encoded as a null
@@ -63,7 +81,20 @@ instance ToJSON CrsObject where
 instance FromJSON CrsObject where
   parseJSON = withObject "expected an object" (\o -> CrsObject <$> o .: "crs")
 
+data Thing crs = Thing { thingA :: Int, thingB :: String}
+  deriving (Eq, Show, Generic)
+instance ToJSON (Thing crs)
+instance FromJSON (Thing crs)
 
+instance Arbitrary (Thing  crs) where
+  arbitrary = Thing <$> arbitrary <*> arbitrary
+
+instance Arbitrary (WithSomeCrs Thing) where
+  arbitrary = do
+    crs <- arbitrary
+    reifyCrs crs $ \(_ :: Proxy crs) -> do
+      thing :: Thing crs <- arbitrary
+      return (WithSomeCrs thing)
 
 instance Arbitrary Crs where
   arbitrary = oneof [

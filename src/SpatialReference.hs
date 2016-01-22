@@ -6,11 +6,14 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module SpatialReference (
     KnownCrs
@@ -23,11 +26,7 @@ module SpatialReference (
   , Epsg
   , SrOrg
 
-  , WithSomeCrs (..)
-  , WithCrs (..)
-  , withCrs
-  , untagCrs
-  , asCrsOf
+  , WithSomeCrs(..)
 
   , pattern Named
   , pattern Coded
@@ -47,6 +46,9 @@ module SpatialReference (
   , reflectCrs
   , sameCrs
 
+  , unWithSomeCrs
+  , getCrs
+
   -- Re-exports
   , (:~:)(Refl)
 ) where
@@ -55,12 +57,10 @@ module SpatialReference (
 #if !MIN_VERSION_base(4,8,0)
 import           Control.Applicative ((<$>), (<*>))
 #endif
-import           Control.DeepSeq     (NFData)
-import           Data.Hashable       (Hashable)
 import           Data.Aeson          ( ToJSON(toJSON), FromJSON(parseJSON)
                                      , Value(Null,Object), withText, withObject
                                      , withScientific, object, (.=), (.:)
-                                     , (.:?))
+                                     , (.!=), (.:?))
 import qualified Data.HashMap.Strict as HM
 import           Data.Proxy          (Proxy(Proxy))
 import           Data.Scientific     (floatingOrInteger)
@@ -264,35 +264,35 @@ sameCrs _ _                                = Nothing
 
 
 
+data WithSomeCrs (a :: * -> *)
+  = forall crs. KnownCrs crs => WithSomeCrs (a crs)
 
--- | A wrapper for something with an associated 'Crs' at the term level
-data WithSomeCrs a = WithSomeCrs Crs a
-  deriving (Eq, Show)
+getCrs :: WithSomeCrs a -> Crs
+getCrs (WithSomeCrs (_ :: a crs)) = reflectCrs (Proxy :: Proxy crs)
+{-# INLINE getCrs #-}
+
+unWithSomeCrs
+  :: forall a crs. KnownCrs crs
+  => WithSomeCrs a -> Maybe (a crs)
+unWithSomeCrs (WithSomeCrs (a :: a crs1)) =
+  case sameCrs (Proxy :: Proxy crs) (Proxy :: Proxy crs1) of
+    Just Refl -> Just a
+    _         -> Nothing
+{-# INLINE unWithSomeCrs #-}
 
 
--- | A newtype wrapper for something with an associated 'KnownCrs' at the
---   type level
-newtype WithCrs crs a = WithCrs { unCrs :: a }
-  deriving (Eq, Show, Ord, NFData, Hashable)
+instance Show (a NoCrs) => Show (WithSomeCrs a) where
+  showsPrec p (WithSomeCrs g) = showParen (p > 10) $
+    showString "WithSomeCrs" . shows (unsafeCoerce g :: a NoCrs)
 
--- | Converts something 'WithCrs' at the type level to a 'WithSomeCrs' at the
---   term level
-untagCrs :: forall a crs. KnownCrs crs
-         => WithCrs crs a -> WithSomeCrs a
-untagCrs t = WithSomeCrs (reflectCrs (Proxy :: Proxy crs)) (unCrs t)
-{-# INLINE untagCrs #-}
+instance Eq (a NoCrs) => Eq (WithSomeCrs a) where
+  WithSomeCrs (a :: a crs1) == WithSomeCrs (b :: a crs2) =
+    case sameCrs (Proxy :: Proxy crs1) (Proxy :: Proxy crs2) of
+      Just Refl -> (==) (unsafeCoerce a :: a NoCrs)
+                        (unsafeCoerce b :: a NoCrs)
+      _         -> False
 
--- | Reifies something 'WithSomeCrs' to a 'WithCrs' at the type level
-withCrs
-  :: forall a b.
-  WithSomeCrs a -> (forall crs. KnownCrs crs => WithCrs crs a -> b) -> b
-withCrs (WithSomeCrs c a) f =
-  reifyCrs c (\(Proxy :: Proxy crs) -> f (WithCrs a :: WithCrs crs a))
-{-# INLINE withCrs #-}
 
-asCrsOf :: forall crs a b. a -> WithCrs crs b -> WithCrs crs a
-asCrsOf = const . WithCrs
-{-# INLINE asCrsOf #-}
 --
 -- GeoJSON de/serialization
 --
@@ -332,24 +332,17 @@ instance FromJSON Crs where
   parseJSON _    = mzero
 
 
-instance ToJSON a => ToJSON (WithSomeCrs a) where
-  toJSON (WithSomeCrs c a) =
-    case toJSON a of
-      Object o -> Object (HM.insert "crs" (toJSON c) o)
-      o        -> o
+instance ToJSON (a NoCrs) => ToJSON (WithSomeCrs a) where
+  toJSON (WithSomeCrs (thing :: a crs)) =
+    case toJSON (unsafeCoerce thing :: a NoCrs) of
+      Object hm -> Object (HM.insert "crs" (toJSON (reflectCrs p)) hm)
+      a         -> a
+    where p = Proxy :: Proxy crs
 
-instance FromJSON a => FromJSON (WithSomeCrs a) where
-  parseJSON = withObject "FromJSON(WithSomeCrs): expected an object" $ \o -> do
-    WithSomeCrs <$> o .: "crs" <*> parseJSON (Object o)
-
-
-instance (KnownCrs crs, ToJSON a) => ToJSON (WithCrs crs a) where
-  toJSON = toJSON . untagCrs
-
-instance (KnownCrs crs, FromJSON a) => FromJSON (WithCrs crs a) where
-  parseJSON o = do
-    t <- parseJSON o
-    withCrs t $ \(ret :: WithCrs crs2 a) ->
-      case sameCrs (Proxy :: Proxy crs) (Proxy :: Proxy crs2) of
-        Just Refl -> return ret
-        Nothing   -> fail "FromJSON(WithCrs): crs mismatch"
+instance FromJSON (a NoCrs) => FromJSON (WithSomeCrs a) where
+  parseJSON =
+    withObject "FromJSON(WithSomeCrs): expected and object" $ \o -> do
+      crs <- o .:? "crs" .!= noCrs
+      reifyCrs crs $ \(Proxy :: Proxy crs) -> do
+        thing :: a NoCrs <- parseJSON (Object o)
+        return (WithSomeCrs (unsafeCoerce thing :: a crs))
