@@ -282,8 +282,9 @@ unWithSomeCrs (WithSomeCrs (a :: a crs1)) =
 
 
 instance Show (a NoCrs) => Show (WithSomeCrs a) where
-  showsPrec p (WithSomeCrs g) = showParen (p > 10) $
-    showString "WithSomeCrs" . shows (unsafeCoerce g :: a NoCrs)
+  showsPrec p (WithSomeCrs g) = showParen (p > 10)
+    $ showString "WithSomeCrs "
+    . showParen True (shows (unsafeCoerce g :: a NoCrs))
 
 instance Eq (a NoCrs) => Eq (WithSomeCrs a) where
   WithSomeCrs (a :: a crs1) == WithSomeCrs (b :: a crs2) =
