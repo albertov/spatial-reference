@@ -63,6 +63,7 @@ import           Data.Aeson          ( ToJSON(toJSON), FromJSON(parseJSON)
                                      , (.!=), (.:?))
 import           Data.Char           (toUpper, toLower)
 import qualified Data.HashMap.Strict as HM
+import           Data.Maybe          (fromMaybe)
 import           Data.Proxy          (Proxy(Proxy))
 import           Data.Scientific     (floatingOrInteger)
 import           Data.Text           (Text, unpack)
@@ -163,13 +164,18 @@ namedCrs = MkNamed
 
 -- | A coded 'Crs' smart constructor. The code must be non-negative
 codedCrs :: String -> Int -> Maybe Crs
-codedCrs type_ code | code >= 0 = Just (MkCoded type_ code)
+codedCrs type_ code | code >= 0 = Just (MkCoded (map toUpper type_) code)
 codedCrs _    _                 = Nothing
 {-# INLINE codedCrs #-}
 
+unsafeCodedCrs :: String -> Int -> Crs
+unsafeCodedCrs type_ =
+  fromMaybe (error "unsafeCodedCrs: invalid code") . codedCrs type_
+{-# INLINE unsafeCodedCrs #-}
+
 -- | A linked 'Crs' constructor.
 linkedCrs :: Maybe LinkType -> Href -> Crs
-linkedCrs = MkLinked
+linkedCrs type_ = MkLinked (fmap (map toLower) type_)
 {-# INLINE linkedCrs #-}
 
 -- | A null 'Crs' constructor
@@ -203,8 +209,8 @@ instance KnownSymbol name => KnownCrs (Named name) where
 instance ( KnownNat code
          , KnownSymbol type_
          ) => KnownCrs (Coded type_ code) where
-  _reflectCrs _ = MkCoded (symbolVal (Proxy :: Proxy type_))
-                          (fromIntegral (natVal (Proxy :: Proxy code)))
+  _reflectCrs _ = unsafeCodedCrs (symbolVal (Proxy :: Proxy type_))
+                                 (fromIntegral (natVal (Proxy :: Proxy code)))
 
 instance ( KnownSymbol href
          , KnownSymbol type_
@@ -305,7 +311,7 @@ instance ToJSON Crs where
       object [ "type"       .= ("name" :: Text)
              , "properties" .= object ["name" .= s]]
     MkCoded t c ->
-      object [ "type"       .= map toUpper t
+      object [ "type"       .= t
              , "properties" .= object ["code" .= c]]
     MkLinked (Just t) h ->
       object [ "type"       .= ("link" :: Text)
@@ -323,7 +329,7 @@ instance FromJSON Crs where
       code <- props .: "code"
       flip (withScientific "crs: expected an integeral code") code $
           maybe (fail "crs: expected a non-negative code") return
-        . codedCrs (map toLower (unpack typ))
+        . codedCrs (unpack typ)
         . either (round :: Double -> Int) id
         . floatingOrInteger
     where
