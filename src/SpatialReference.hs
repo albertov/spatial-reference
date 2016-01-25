@@ -61,6 +61,7 @@ import           Data.Aeson          ( ToJSON(toJSON), FromJSON(parseJSON)
                                      , Value(Null,Object), withText, withObject
                                      , withScientific, object, (.=), (.:)
                                      , (.!=), (.:?))
+import           Data.Char           (toUpper, toLower)
 import qualified Data.HashMap.Strict as HM
 import           Data.Proxy          (Proxy(Proxy))
 import           Data.Scientific     (floatingOrInteger)
@@ -119,7 +120,7 @@ data Crs
   | MkNoCrs
   deriving (Eq, Show, Ord)
 
--- TODO: Implement a Show instance that normalizes so equivalent CRSs compare
+-- TODO: Implement an Eq instance that normalizes so equivalent CRSs compare
 --       equal
 
 -- | A url for use with 'linkedCrs'
@@ -304,7 +305,7 @@ instance ToJSON Crs where
       object [ "type"       .= ("name" :: Text)
              , "properties" .= object ["name" .= s]]
     MkCoded t c ->
-      object [ "type"       .= t
+      object [ "type"       .= map toUpper t
              , "properties" .= object ["code" .= c]]
     MkLinked (Just t) h ->
       object [ "type"       .= ("link" :: Text)
@@ -322,7 +323,8 @@ instance FromJSON Crs where
       code <- props .: "code"
       flip (withScientific "crs: expected an integeral code") code $
           maybe (fail "crs: expected a non-negative code") return
-        . codedCrs (unpack typ) . either (round :: Double -> Int) id
+        . codedCrs (map toLower (unpack typ))
+        . either (round :: Double -> Int) id
         . floatingOrInteger
     where
       withProperties f =
