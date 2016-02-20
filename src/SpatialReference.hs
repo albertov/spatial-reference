@@ -105,7 +105,7 @@ data NoCrs
 -- | A type synonym of a EPSG coded 'Crs'
 --
 -- >>> Proxy :: Proxy (EPSG 23030)
-type Epsg  code = Coded "epsg"   code
+type Epsg  code = Coded "EPSG"   code
 
 -- | A type synonym of a SR-ORG coded 'Crs'
 --
@@ -147,10 +147,10 @@ pattern Linked a b <- MkLinked a b
 pattern NoCrs      <- MkNoCrs
 
 -- | Pattern match on a 'epsgCrs'
-pattern Epsg     a <- MkCoded "epsg"   a
+pattern Epsg     a <- MkCoded "EPSG"   a
 
 -- | Pattern match on a 'srOrgCrs'
-pattern SrOrg    a <- MkCoded "sr-org" a
+pattern SrOrg    a <- MkCoded "SR-ORG" a
 
 
 --
@@ -185,12 +185,12 @@ noCrs = MkNoCrs
 
 -- | A EPSG code 'Crs' constructor
 epsgCrs :: Int -> Maybe Crs
-epsgCrs = codedCrs "epsg"
+epsgCrs = codedCrs "EPSG"
 {-# INLINE epsgCrs #-}
 
 -- | A SR-ORG code 'Crs' constructpr
 srOrgCrs :: Int -> Maybe Crs
-srOrgCrs = codedCrs "sr-org"
+srOrgCrs = codedCrs "SR-ORG"
 {-# INLINE srOrgCrs #-}
 
 --
