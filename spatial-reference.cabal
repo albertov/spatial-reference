@@ -2,7 +2,7 @@ name:                spatial-reference
 version:             0.1.0.1
 synopsis:            Spatial reference types for use in GIS applications
 description:         Please see README.md
-homepage:            http://github.com/meteogrid/spatial-reference
+homepage:            http://github.com/albertov/spatial-reference
 license:             BSD3
 license-file:        LICENSE
 author:              Alberto Valverde González
