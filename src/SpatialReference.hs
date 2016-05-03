@@ -14,9 +14,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module SpatialReference (
     KnownCrs
+  , ToProj4 (..)
 
   , Crs
   , Named
@@ -27,6 +29,7 @@ module SpatialReference (
   , SrOrg
 
   , WithSomeCrs(..)
+  , WithSomeEpsg(..)
 
   , pattern Named
   , pattern Coded
@@ -48,6 +51,8 @@ module SpatialReference (
 
   , unWithSomeCrs
   , getCrs
+  , getEpsg
+  , getProj4
 
   -- Re-exports
   , (:~:)(Refl)
@@ -197,6 +202,9 @@ srOrgCrs = codedCrs "SR-ORG"
 -- Reification of term levels to types and reflection from types to terms
 --
 
+class ToProj4 (c :: *) where
+  toProj4 :: proxy c -> String
+
 -- | The class of 'Crs's that can be reified to the type level and reflected
 --   back
 class KnownCrs (c :: *) where
@@ -212,6 +220,10 @@ instance ( KnownNat code
   _reflectCrs _ = unsafeCodedCrs (symbolVal (Proxy :: Proxy type_))
                                  (fromIntegral (natVal (Proxy :: Proxy code)))
 
+instance KnownNat code => ToProj4 (Epsg code) where
+  toProj4 s = case reflectCrs (Proxy :: Proxy (Epsg code)) of
+                Coded _ code -> "+init=epsg:" ++ show code
+
 instance ( KnownSymbol href
          , KnownSymbol type_
          ) => KnownCrs (Linked ('Just type_) href) where
@@ -224,6 +236,7 @@ instance KnownSymbol href => KnownCrs (Linked 'Nothing href) where
 
 instance KnownCrs NoCrs where
   _reflectCrs _ = noCrs
+
 
 
 -- | Reflect a 'Proxy' of a 'KnownCrs' back into a 'Crs' term.
@@ -274,9 +287,24 @@ sameCrs _ _                                = Nothing
 data WithSomeCrs (a :: * -> *)
   = forall crs. KnownCrs crs => WithSomeCrs (a crs)
 
+data WithSomeEpsg (a :: * -> *)
+  = forall code. (KnownCrs (Epsg code), KnownNat code, ToProj4 (Epsg code))
+  => WithSomeEpsg (a (Epsg code))
+
 getCrs :: WithSomeCrs a -> Crs
 getCrs (WithSomeCrs (_ :: a crs)) = reflectCrs (Proxy :: Proxy crs)
 {-# INLINE getCrs #-}
+
+getProj4 :: WithSomeEpsg a -> String
+getProj4 (WithSomeEpsg (_ :: a (Epsg c))) = toProj4 (Proxy :: Proxy (Epsg c))
+{-# INLINE getProj4 #-}
+
+getEpsg :: WithSomeEpsg a -> Int
+getEpsg (WithSomeEpsg (_ :: a (Epsg c))) =
+  fromIntegral (natVal (Proxy :: Proxy c))
+{-# INLINE getEpsg #-}
+
+
 
 unWithSomeCrs
   :: forall a crs. KnownCrs crs
@@ -291,6 +319,11 @@ unWithSomeCrs (WithSomeCrs (a :: a crs1)) =
 instance Show (a NoCrs) => Show (WithSomeCrs a) where
   showsPrec p (WithSomeCrs g) = showParen (p > 10)
     $ showString "WithSomeCrs "
+    . showParen True (shows (unsafeCoerce g :: a NoCrs))
+
+instance Show (a NoCrs) => Show (WithSomeEpsg a) where
+  showsPrec p (WithSomeEpsg (g :: a (Epsg code))) = showParen (p > 10)
+    $ showString ("WithEpsg " ++ show (natVal (Proxy :: Proxy code)))
     . showParen True (shows (unsafeCoerce g :: a NoCrs))
 
 instance Eq (a NoCrs) => Eq (WithSomeCrs a) where
@@ -348,6 +381,9 @@ instance ToJSON (a NoCrs) => ToJSON (WithSomeCrs a) where
       a         -> a
     where p = Proxy :: Proxy crs
 
+instance ToJSON (a NoCrs) => ToJSON (WithSomeEpsg a) where
+  toJSON (WithSomeEpsg a) = toJSON (WithSomeCrs a)
+
 instance FromJSON (a NoCrs) => FromJSON (WithSomeCrs a) where
   parseJSON =
     withObject "FromJSON(WithSomeCrs): expected and object" $ \o -> do
@@ -355,3 +391,15 @@ instance FromJSON (a NoCrs) => FromJSON (WithSomeCrs a) where
       reifyCrs crs $ \(Proxy :: Proxy crs) -> do
         thing :: a NoCrs <- parseJSON (Object o)
         return (WithSomeCrs (unsafeCoerce thing :: a crs))
+
+instance FromJSON (a NoCrs) => FromJSON (WithSomeEpsg a) where
+  parseJSON o = do
+    WithSomeCrs (a :: a crs) <- parseJSON o
+    case reflectCrs (Proxy :: Proxy crs) of
+      Epsg code ->
+        case someNatVal (fromIntegral (code)) of
+          Just (SomeNat (Proxy :: Proxy code)) ->
+            return (WithSomeEpsg ((unsafeCoerce a) :: a (Epsg code)))
+          _ -> fail "FromJSON(WithSomeEpsg): Not a valid EPSG"
+      _ -> fail "FromJSON(WithSomeEpsg): Not a valid EPSG"
+

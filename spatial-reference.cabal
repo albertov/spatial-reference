@@ -1,5 +1,5 @@
 name:                spatial-reference
-version:             0.1.0.1
+version:             0.1.1
 synopsis:            Spatial reference types for use in GIS applications
 description:         Please see README.md
 homepage:            http://github.com/albertov/spatial-reference
@@ -15,6 +15,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     SpatialReference
+                     , SpatialReference.Epsg
   build-depends:       base >= 4.7 && < 5
                      , aeson
                      , scientific
