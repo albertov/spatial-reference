@@ -4,7 +4,6 @@ addons:
     packages:
     - libgmp-dev
 env:
-- ARGS=""
 - ARGS="--resolver lts-2"
 - ARGS="--resolver lts"
 - ARGS="--resolver nightly"
