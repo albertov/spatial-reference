@@ -19,6 +19,7 @@
 module SpatialReference (
     KnownCrs
   , ToProj4 (..)
+  , ToEPSG (..)
 
   , Crs
   , Named
@@ -202,6 +203,10 @@ srOrgCrs = codedCrs "SR-ORG"
 -- Reification of term levels to types and reflection from types to terms
 --
 
+-- TODO: Mover a SpatialReference
+class ToEPSG (c :: *) where
+  toEPSG :: proxy c -> Integer
+
 class ToProj4 (c :: *) where
   toProj4 :: proxy c -> String
 
@@ -223,6 +228,9 @@ instance ( KnownNat code
 instance KnownNat code => ToProj4 (Epsg code) where
   toProj4 s = case reflectCrs (Proxy :: Proxy (Epsg code)) of
                 Coded _ code -> "+init=epsg:" ++ show code
+
+instance KnownNat code => ToEPSG (Epsg code) where
+  toEPSG _ = natVal (Proxy :: Proxy code)
 
 instance ( KnownSymbol href
          , KnownSymbol type_
