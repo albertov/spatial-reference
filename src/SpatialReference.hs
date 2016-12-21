@@ -28,6 +28,7 @@ module SpatialReference (
   , NoCrs
   , Epsg
   , SrOrg
+  , Proj4
 
   , WithSomeCrs(..)
   , WithSomeEpsg(..)
@@ -38,6 +39,7 @@ module SpatialReference (
   , pattern SrOrg
   , pattern Linked
   , pattern NoCrs
+  , pattern Proj4
 
   , namedCrs
   , codedCrs
@@ -45,6 +47,7 @@ module SpatialReference (
   , noCrs
   , srOrgCrs
   , epsgCrs
+  , proj4Crs
 
   , reifyCrs
   , reflectCrs
@@ -74,6 +77,7 @@ import           Data.Proxy          (Proxy(Proxy))
 import           Data.Scientific     (floatingOrInteger)
 import           Data.Text           (Text, unpack)
 import           Data.Type.Equality  ((:~:)(Refl))
+import           Data.Typeable       (Typeable)
 import           Control.Monad       (mzero)
 import           GHC.TypeLits        ( KnownNat, KnownSymbol, Nat, Symbol
                                      , SomeNat(SomeNat), SomeSymbol(SomeSymbol)
@@ -118,6 +122,7 @@ type Epsg  code = Coded "EPSG"   code
 -- >>> Proxy :: Proxy (SrOrg 35)
 type SrOrg code = Coded "sr-org" code
 
+type Proj4 str  = Linked ('Just "proj4") str
 
 -- | The term level 'Crs'. Use the smart constructors to build them.
 data Crs
@@ -157,6 +162,9 @@ pattern Epsg     a <- MkCoded "EPSG"   a
 
 -- | Pattern match on a 'srOrgCrs'
 pattern SrOrg    a <- MkCoded "SR-ORG" a
+
+-- | Pattern match on a 'proj4Crs'
+pattern Proj4    a <- MkLinked (Just "proj4") a
 
 
 --
@@ -199,21 +207,26 @@ srOrgCrs :: Int -> Maybe Crs
 srOrgCrs = codedCrs "SR-ORG"
 {-# INLINE srOrgCrs #-}
 
+-- | A proj4 'String' 'Crs' constructpr
+proj4Crs :: String -> Crs
+proj4Crs = linkedCrs (Just "proj4")
+{-# INLINE proj4Crs #-}
+
 --
 -- Reification of term levels to types and reflection from types to terms
 --
 
--- TODO: Mover a SpatialReference
-class ToEPSG (c :: *) where
-  toEPSG :: proxy c -> Integer
-
-class ToProj4 (c :: *) where
-  toProj4 :: proxy c -> String
-
 -- | The class of 'Crs's that can be reified to the type level and reflected
 --   back
-class KnownCrs (c :: *) where
+class Typeable c => KnownCrs (c :: *) where
   _reflectCrs :: proxy c -> Crs
+
+class KnownCrs c => ToEPSG (c :: *) where
+  toEPSG :: proxy c -> Integer
+
+class KnownCrs c => ToProj4 (c :: *) where
+  toProj4 :: proxy c -> String
+
 
 
 instance KnownSymbol name => KnownCrs (Named name) where
@@ -226,11 +239,17 @@ instance ( KnownNat code
                                  (fromIntegral (natVal (Proxy :: Proxy code)))
 
 instance KnownNat code => ToProj4 (Epsg code) where
-  toProj4 s = case reflectCrs (Proxy :: Proxy (Epsg code)) of
+  toProj4 _ = case reflectCrs (Proxy :: Proxy (Epsg code)) of
                 Coded _ code -> "+init=epsg:" ++ show code
+
+instance KnownSymbol code => ToProj4 (Proj4 code) where
+  toProj4 _ = symbolVal (Proxy :: Proxy code)
 
 instance KnownNat code => ToEPSG (Epsg code) where
   toEPSG _ = natVal (Proxy :: Proxy code)
+
+instance ToEPSG NoCrs where
+  toEPSG _ = 0
 
 instance ( KnownSymbol href
          , KnownSymbol type_
