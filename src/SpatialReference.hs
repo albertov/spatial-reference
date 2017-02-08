@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
@@ -20,6 +21,9 @@ module SpatialReference (
     KnownCrs
   , ToProj4 (..)
   , ToEPSG (..)
+  , EPSG
+  , getEPSG
+  , mkEPSG
 
   , Crs
   , Named
@@ -50,12 +54,12 @@ module SpatialReference (
   , proj4Crs
 
   , reifyCrs
+  , reifyEPSG
   , reflectCrs
   , sameCrs
 
   , unWithSomeCrs
   , getCrs
-  , getEpsg
   , getProj4
 
   -- Re-exports
@@ -79,6 +83,7 @@ import           Data.Text           (Text, unpack)
 import           Data.Type.Equality  ((:~:)(Refl))
 import           Data.Typeable       (Typeable)
 import           Control.Monad       (mzero)
+import           GHC.Generics (Generic)
 import           GHC.TypeLits        ( KnownNat, KnownSymbol, Nat, Symbol
                                      , SomeNat(SomeNat), SomeSymbol(SomeSymbol)
                                      , natVal, symbolVal, someNatVal
@@ -114,7 +119,7 @@ data NoCrs
 
 -- | A type synonym of a EPSG coded 'Crs'
 --
--- >>> Proxy :: Proxy (EPSG 23030)
+-- >>> Proxy :: Proxy (Epsg 23030)
 type Epsg  code = Coded "EPSG"   code
 
 -- | A type synonym of a SR-ORG coded 'Crs'
@@ -222,7 +227,7 @@ class Typeable c => KnownCrs (c :: *) where
   _reflectCrs :: proxy c -> Crs
 
 class KnownCrs c => ToEPSG (c :: *) where
-  toEPSG :: proxy c -> Integer
+  toEPSG :: proxy c -> EPSG
 
 class KnownCrs c => ToProj4 (c :: *) where
   toProj4 :: proxy c -> String
@@ -238,18 +243,15 @@ instance ( KnownNat code
   _reflectCrs _ = unsafeCodedCrs (symbolVal (Proxy :: Proxy type_))
                                  (fromIntegral (natVal (Proxy :: Proxy code)))
 
-instance KnownNat code => ToProj4 (Epsg code) where
-  toProj4 _ = case reflectCrs (Proxy :: Proxy (Epsg code)) of
-                Coded _ code -> "+init=epsg:" ++ show code
+instance (KnownCrs c, ToEPSG c) => ToProj4 c where
+  toProj4 p = let code = getEPSG (toEPSG p)
+              in "+init=epsg:" ++ show code
 
 instance KnownSymbol code => ToProj4 (Proj4 code) where
   toProj4 _ = symbolVal (Proxy :: Proxy code)
 
 instance KnownNat code => ToEPSG (Epsg code) where
-  toEPSG _ = natVal (Proxy :: Proxy code)
-
-instance ToEPSG NoCrs where
-  toEPSG _ = 0
+  toEPSG _ = EPSG (fromIntegral (natVal (Proxy :: Proxy code)))
 
 instance ( KnownSymbol href
          , KnownSymbol type_
@@ -301,6 +303,28 @@ reifyCrs c f = case c of
   MkNoCrs -> f (Proxy :: Proxy NoCrs)
 {-# INLINE reifyCrs #-}
 
+newtype EPSG = EPSG Int deriving (Eq, Ord, Show, Generic, ToJSON)
+
+instance FromJSON EPSG where
+  parseJSON o = do
+    i <- parseJSON o
+    maybe (fail "Invalid EPSG code") pure (mkEPSG i)
+
+getEPSG :: EPSG -> Int
+getEPSG (EPSG code) = code
+
+mkEPSG :: Int -> Maybe EPSG
+mkEPSG n | n>=0 =  Just (EPSG n)
+mkEPSG _        = Nothing
+
+-- | Reify a 'EPSG' to a 'Proxy' of a 'ToEPSG' which can be used as a
+--   phantom type for geo-spatial objects.
+reifyEPSG :: forall a. EPSG -> (forall c. ToEPSG c => Proxy c -> a) -> a
+reifyEPSG (EPSG code) f =
+  case someNatVal (fromIntegral code) of
+    Just (SomeNat (Proxy :: Proxy code)) -> f (Proxy :: Proxy (Coded "EPSG" code))
+    _ -> error "reflectEPSG: negative epsg code. this should never happen"
+
 -- | Provides a witness of the equality of two 'KnownCrs' types.
 --   Pattern-match on the 'Just Refl' and the compiler will know that
 --   the 'KnownCrs's carried by the proxies is the same type.
@@ -315,22 +339,15 @@ data WithSomeCrs (a :: * -> *)
   = forall crs. KnownCrs crs => WithSomeCrs (a crs)
 
 data WithSomeEpsg (a :: * -> *)
-  = forall code. (KnownCrs (Epsg code), KnownNat code, ToProj4 (Epsg code))
-  => WithSomeEpsg (a (Epsg code))
+  = forall crs. ToEPSG crs => WithSomeEpsg (a crs)
 
 getCrs :: WithSomeCrs a -> Crs
 getCrs (WithSomeCrs (_ :: a crs)) = reflectCrs (Proxy :: Proxy crs)
 {-# INLINE getCrs #-}
 
 getProj4 :: WithSomeEpsg a -> String
-getProj4 (WithSomeEpsg (_ :: a (Epsg c))) = toProj4 (Proxy :: Proxy (Epsg c))
+getProj4 (WithSomeEpsg (_ :: a c)) = toProj4 (Proxy :: Proxy c)
 {-# INLINE getProj4 #-}
-
-getEpsg :: WithSomeEpsg a -> Int
-getEpsg (WithSomeEpsg (_ :: a (Epsg c))) =
-  fromIntegral (natVal (Proxy :: Proxy c))
-{-# INLINE getEpsg #-}
-
 
 
 unWithSomeCrs
@@ -349,8 +366,8 @@ instance Show (a NoCrs) => Show (WithSomeCrs a) where
     . showParen True (shows (unsafeCoerce g :: a NoCrs))
 
 instance Show (a NoCrs) => Show (WithSomeEpsg a) where
-  showsPrec p (WithSomeEpsg (g :: a (Epsg code))) = showParen (p > 10)
-    $ showString ("WithEpsg " ++ show (natVal (Proxy :: Proxy code)))
+  showsPrec p (WithSomeEpsg (g :: a c)) = showParen (p > 10)
+    $ showString ("WithSomeEpsg " ++ show (toEPSG (Proxy :: Proxy c)))
     . showParen True (shows (unsafeCoerce g :: a NoCrs))
 
 instance Eq (a NoCrs) => Eq (WithSomeCrs a) where
@@ -359,6 +376,11 @@ instance Eq (a NoCrs) => Eq (WithSomeCrs a) where
       Just Refl -> (==) (unsafeCoerce a :: a NoCrs)
                         (unsafeCoerce b :: a NoCrs)
       _         -> False
+
+instance Eq (a NoCrs) => Eq (WithSomeEpsg a) where
+  WithSomeEpsg (a :: a crs1) == WithSomeEpsg (b :: a crs2) =
+    toEPSG (Proxy :: Proxy crs1) == toEPSG (Proxy :: Proxy crs2) &&
+      (unsafeCoerce a :: a NoCrs) == (unsafeCoerce b :: a NoCrs)
 
 
 --
