@@ -226,7 +226,7 @@ proj4Crs = linkedCrs (Just "proj4")
 class Typeable c => KnownCrs (c :: *) where
   _reflectCrs :: proxy c -> Crs
 
-class KnownCrs c => ToEPSG (c :: *) where
+class ToProj4 c => ToEPSG (c :: *) where
   toEPSG :: proxy c -> EPSG
 
 class KnownCrs c => ToProj4 (c :: *) where
@@ -243,15 +243,16 @@ instance ( KnownNat code
   _reflectCrs _ = unsafeCodedCrs (symbolVal (Proxy :: Proxy type_))
                                  (fromIntegral (natVal (Proxy :: Proxy code)))
 
-instance (KnownCrs c, ToEPSG c) => ToProj4 c where
-  toProj4 p = let code = getEPSG (toEPSG p)
-              in "+init=epsg:" ++ show code
-
 instance KnownSymbol code => ToProj4 (Proj4 code) where
   toProj4 _ = symbolVal (Proxy :: Proxy code)
 
 instance KnownNat code => ToEPSG (Epsg code) where
   toEPSG _ = EPSG (fromIntegral (natVal (Proxy :: Proxy code)))
+
+instance KnownNat code => ToProj4 (Epsg code) where
+  toProj4 p = let code = getEPSG (toEPSG p)
+              in "+init=epsg:" ++ show code
+
 
 instance ( KnownSymbol href
          , KnownSymbol type_
